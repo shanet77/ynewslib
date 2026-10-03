@@ -40,9 +40,9 @@ jobs:
           export PATH="$HOME/.local/go/bin:$PATH"
           if ! go version 2>/dev/null | grep -q go1.27; then
             mkdir -p "$HOME/.local/go"
-            curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.xz -o /tmp/go.tar.xz
+            curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o /tmp/go.tar.gz
             rm -rf "$HOME/.local/go/go"
-            tar -xJf /tmp/go.tar.xz -C "$HOME/.local/go"
+            tar -xzf /tmp/go.tar.gz -C "$HOME/.local/go"
           fi
           go version
 
