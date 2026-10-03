@@ -25,7 +25,7 @@ if ! command -v podman &>/dev/null; then
 fi
 echo "podman version: $(podman --version)"
 
-podman network exists hoopnerd-edge || podman network create hoopnerd-edge
+podman network exists ynews-net || podman network create ynews-net
 
 echo "Building localhost/ynews:main-latest..."
 podman build --platform linux/amd64 --tag localhost/ynews:main-latest .

@@ -9,7 +9,7 @@ ContainerName=ynews
 
 Environment=PORT=8080
 
-Network=hoopnerd-edge
+Network=ynews-net
 PodmanArgs=--network-alias=ynews
 
 PodmanArgs=--security-opt=no-new-privileges:true
