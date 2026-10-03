@@ -1,0 +1,25 @@
+[Unit]
+Description=ynews (Hacker News frontend)
+After=network-online.target
+
+[Container]
+Image=localhost/ynews:main-latest
+Pull=never
+ContainerName=ynews
+
+Environment=PORT=8080
+
+Network=hoopnerd-edge
+PodmanArgs=--network-alias=ynews
+
+PodmanArgs=--security-opt=no-new-privileges:true
+PodmanArgs=--cap-drop=ALL
+PodmanArgs=--read-only
+PodmanArgs=--tmpfs=/tmp
+PodmanArgs=--init
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

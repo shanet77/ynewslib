@@ -1,0 +1,254 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Optional existing image tag to deploy without rebuilding"
+        required: false
+        default: ""
+
+jobs:
+  test:
+    runs-on:
+      - linux-amd64
+    steps:
+      - name: Checkout repository
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}"
+          cd "${GITHUB_WORKSPACE}"
+          repo_host="${GITHUB_SERVER_URL#https://}"
+          repo_url="https://${repo_host}/${GITHUB_REPOSITORY}.git"
+          if [ ! -d .git ]; then
+            git init
+            git remote add origin "${repo_url}"
+          else
+            git remote set-url origin "${repo_url}"
+          fi
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
+
+      - name: Bootstrap Go 1.27
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
+          export PATH="$HOME/.local/go/bin:$PATH"
+          if ! go version 2>/dev/null | grep -q go1.27; then
+            mkdir -p "$HOME/.local/go"
+            curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.xz -o /tmp/go.tar.xz
+            rm -rf "$HOME/.local/go/go"
+            tar -xJf /tmp/go.tar.xz -C "$HOME/.local/go"
+          fi
+          go version
+
+      - name: Vet and test
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
+          export PATH="$HOME/.local/go/bin:$PATH"
+          go vet ./...
+          go test ./...
+
+  build_images_prod:
+    if: github.ref == 'refs/heads/main'
+    needs: test
+    runs-on:
+      - linux-amd64
+    outputs:
+      image_tag: ${{ steps.resolve_image_tag.outputs.image_tag }}
+    steps:
+      - name: Resolve deployment image tag
+        id: resolve_image_tag
+        run: |
+          set -euo pipefail
+          IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+          if [ -z "${IMAGE_TAG}" ]; then
+            IMAGE_TAG="${GITHUB_SHA}"
+          fi
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image on dockernode
+        if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '') }}
+        env:
+          DOCKERNODE_HOST: ${{ secrets.DOCKERNODE_HOST }}
+          DOCKERNODE_USER: ${{ secrets.DOCKERNODE_USER }}
+          DOCKERNODE_SSH_KEY: ${{ secrets.DOCKERNODE_SSH_KEY }}
+          DOCKERNODE_PATH: ${{ secrets.DOCKERNODE_PATH }}
+          REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          REGISTRY_NAMESPACE: ${{ secrets.REGISTRY_NAMESPACE || vars.REGISTRY_NAMESPACE }}
+          IMAGE_TAG: ${{ steps.resolve_image_tag.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          : "${DOCKERNODE_HOST:?DOCKERNODE_HOST is required}"
+          : "${DOCKERNODE_USER:?DOCKERNODE_USER is required}"
+          : "${DOCKERNODE_SSH_KEY:?DOCKERNODE_SSH_KEY is required}"
+          : "${DOCKERNODE_PATH:?DOCKERNODE_PATH is required}"
+          : "${REGISTRY_URL:?REGISTRY_URL is required}"
+          : "${REGISTRY_USERNAME:?REGISTRY_USERNAME is required}"
+          : "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD is required}"
+          : "${REGISTRY_NAMESPACE:?REGISTRY_NAMESPACE is required}"
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          key_file=~/.ssh/dockernode_deploy_key
+          printf '%s\n' "${DOCKERNODE_SSH_KEY}" > "${key_file}"
+          chmod 600 "${key_file}"
+
+          REPO_HOST="${GITHUB_SERVER_URL#https://}"
+          REPO_URL="https://${REPO_HOST}/${GITHUB_REPOSITORY}.git"
+          REGISTRY_PASSWORD_B64="$(printf '%s' "${REGISTRY_PASSWORD}" | base64 | tr -d '\n')"
+
+          ssh -i "${key_file}" \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=30 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=4 \
+            -o BatchMode=yes \
+            "${DOCKERNODE_USER}@${DOCKERNODE_HOST}" \
+            "export DOCKERNODE_PATH='${DOCKERNODE_PATH}' REPO_URL='${REPO_URL}' TARGET_SHA='${GITHUB_SHA}' IMAGE_TAG='${IMAGE_TAG}' REGISTRY_HOST='${REGISTRY_HOST}' REGISTRY_USERNAME='${REGISTRY_USERNAME}' REGISTRY_PASSWORD_B64='${REGISTRY_PASSWORD_B64}' REGISTRY_NAMESPACE='${REGISTRY_NAMESPACE}'; bash -s" \
+            <<'EOF_REMOTE'
+          set -euo pipefail
+
+          if [ ! -d "${DOCKERNODE_PATH}/.git" ]; then
+            mkdir -p "$(dirname "${DOCKERNODE_PATH}")"
+            git clone "${REPO_URL}" "${DOCKERNODE_PATH}"
+          fi
+
+          cd "${DOCKERNODE_PATH}"
+          git fetch --all --prune --force
+          git checkout --detach "${TARGET_SHA}"
+
+          REGISTRY_PASSWORD="$(printf '%s' "${REGISTRY_PASSWORD_B64}" | base64 -d)"
+          echo "${REGISTRY_PASSWORD}" | podman login "${REGISTRY_HOST}" -u "${REGISTRY_USERNAME}" --password-stdin
+
+          IMAGE="${REGISTRY_HOST}/${REGISTRY_NAMESPACE}/ynews:${IMAGE_TAG}"
+          IMAGE_LATEST="${REGISTRY_HOST}/${REGISTRY_NAMESPACE}/ynews:main-latest"
+
+          echo "Building ${IMAGE}"
+          podman build --platform linux/amd64 --tag "${IMAGE}" --tag "${IMAGE_LATEST}" .
+          podman push "${IMAGE}"
+          podman push "${IMAGE_LATEST}"
+          EOF_REMOTE
+
+      - name: Skip build (redeploy existing tag)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '' }}
+        run: echo "Skipping build. Using existing tag ${{ steps.resolve_image_tag.outputs.image_tag }}"
+
+  deploy_prod:
+    if: github.ref == 'refs/heads/main'
+    needs:
+      - test
+      - build_images_prod
+    runs-on:
+      - linux-amd64
+    steps:
+      - name: Checkout repository
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}"
+          cd "${GITHUB_WORKSPACE}"
+          repo_host="${GITHUB_SERVER_URL#https://}"
+          repo_url="https://${repo_host}/${GITHUB_REPOSITORY}.git"
+          if [ ! -d .git ]; then
+            git init
+            git remote add origin "${repo_url}"
+          else
+            git remote set-url origin "${repo_url}"
+          fi
+          git fetch origin main
+          git checkout --detach FETCH_HEAD
+
+      - name: Deploy to Racknerd over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          REGISTRY_NAMESPACE: ${{ secrets.REGISTRY_NAMESPACE || vars.REGISTRY_NAMESPACE }}
+          IMAGE_TAG: ${{ needs.build_images_prod.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
+          : "${DEPLOY_HOST:?DEPLOY_HOST is required}"
+          : "${DEPLOY_USER:?DEPLOY_USER is required}"
+          : "${DEPLOY_SSH_KEY:?DEPLOY_SSH_KEY is required}"
+          : "${DEPLOY_PATH:?DEPLOY_PATH is required}"
+          : "${IMAGE_TAG:?IMAGE_TAG is required}"
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          key_file=~/.ssh/prod_deploy_key
+          if printf '%s' "${DEPLOY_SSH_KEY}" | grep -q '^LS0t'; then
+            printf '%s' "${DEPLOY_SSH_KEY}" | base64 -d > "${key_file}"
+            printf '\n' >> "${key_file}"
+          else
+            printf '%s\n' "${DEPLOY_SSH_KEY}" > "${key_file}"
+          fi
+          chmod 600 "${key_file}"
+
+          REPO_HOST="${GITHUB_SERVER_URL#https://}"
+          REPO_URL="https://${REPO_HOST}/${GITHUB_REPOSITORY}.git"
+          REGISTRY_PASSWORD_B64="$(printf '%s' "${REGISTRY_PASSWORD}" | base64 | tr -d '\n')"
+
+          DEPLOY_SCRIPT_B64="$(base64 < scripts/deploy-quadlet.sh | tr -d '\n')"
+
+          DEPLOY_LOG="$(mktemp)"
+          trap 'rm -f "${DEPLOY_LOG}"' EXIT
+
+          set +e
+          ssh -i "${key_file}" \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=30 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=4 \
+            -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "export DEPLOY_PATH='${DEPLOY_PATH}' REPO_URL='${REPO_URL}' TARGET_SHA='${GITHUB_SHA}' IMAGE_TAG='${IMAGE_TAG}' REGISTRY_URL='${REGISTRY_URL}' REGISTRY_USERNAME='${REGISTRY_USERNAME}' REGISTRY_PASSWORD_B64='${REGISTRY_PASSWORD_B64}' REGISTRY_NAMESPACE='${REGISTRY_NAMESPACE}' DEPLOY_SCRIPT_B64='${DEPLOY_SCRIPT_B64}'; bash -s" \
+            >"${DEPLOY_LOG}" 2>&1 <<'EOF_REMOTE'
+          set -euo pipefail
+          echo "=== remote bootstrap: host=$(hostname 2>/dev/null || echo unknown) ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) pid=$$ ==="
+          tmp_script="$(mktemp)"
+          trap 'rm -f "${tmp_script}"' EXIT
+          printf '%s' "${DEPLOY_SCRIPT_B64}" | base64 -d > "${tmp_script}"
+          chmod +x "${tmp_script}"
+          bash "${tmp_script}"
+          echo "=== remote bootstrap: done ==="
+          EOF_REMOTE
+          SSH_RC=$?
+          set -e
+
+          cat "${DEPLOY_LOG}"
+
+          if ! grep -q '=== deploy-quadlet starting ===' "${DEPLOY_LOG}"; then
+            echo "=== DEPLOY DID NOT RUN: sentinel line not found (ssh rc=${SSH_RC}) ===" >&2
+            exit 1
+          fi
+          if [ "${SSH_RC}" -ne 0 ]; then
+            echo "=== DEPLOY FAILED: remote exited with code ${SSH_RC} ===" >&2
+            exit "${SSH_RC}"
+          fi
+          echo "=== deploy_prod complete ==="
+
+      - name: Verify public endpoint
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 15 https://hackernews.hoopnerd.xyz/ >/dev/null; then
+              echo "https://hackernews.hoopnerd.xyz is healthy"
+              exit 0
+            fi
+            echo "Endpoint not ready yet (attempt ${i}/6), waiting 10s..."
+            sleep 10
+          done
+          echo "Public endpoint verification failed" >&2
+          exit 1
