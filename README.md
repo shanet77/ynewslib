@@ -3,9 +3,8 @@
 Self-hosted, server-rendered Hacker News frontend
 
 - Reads via the [official Firebase API](https://github.com/hackernews/api) (top/new/best/ask/show/jobs, full comment trees, users)
-- Collapsible threads via native `<details>` (no JS)
-- HTMX for vote buttons (stubs until M3)
-- Voting/login proxied to news.ycombinator.com (M3, currently stubbed)
+- Collapsible threads via native `<details>` (no JS, no client dependencies at all)
+- Comment HTML sanitized with bluemonday; strict CSP, no external requests
 
 ## Run
 

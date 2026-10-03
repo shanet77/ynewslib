@@ -2,7 +2,6 @@
 <details open class="comment">
   <summary>
     <a href="/user/{{.By}}">{{.By}}</a> · {{age .Time}}
-    <button class="vote" hx-post="/vote/{{.ID}}" hx-swap="outerHTML">▲</button>
   </summary>
   <div class="body">{{sanitize .Text}}</div>
   {{range .Children}}{{template "comment" .}}{{end}}

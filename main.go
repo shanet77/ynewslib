@@ -29,6 +29,11 @@ var feeds = []struct{ Path, Label string }{
 	{"", "top"}, {"new", "new"}, {"best", "best"}, {"ask", "ask"}, {"show", "show"}, {"jobs", "jobs"},
 }
 
+// user-supplied feed strings must map through this allowlist to Firebase feed names
+var feedAPI = map[string]string{
+	"": "top", "top": "top", "new": "new", "best": "best", "ask": "ask", "show": "show", "jobs": "job",
+}
+
 type Feed struct{ Path, Label string }
 
 type Page struct {
@@ -40,7 +45,6 @@ type Page struct {
 	Story    hn.Item
 	Comments []hn.Item
 	User     hn.User
-	Flash    string
 }
 
 func (p *Page) setNav(active string) {
@@ -57,7 +61,7 @@ func main() {
 		port = "8080"
 	}
 	tpl := template.Must(template.New("").Funcs(template.FuncMap{
-		"age": age, "domain": domain, "sanitize": sanitize,
+		"age": age, "domain": domain, "sanitize": sanitize, "add": func(a, b int) int { return a + b },
 	}).ParseFS(files, "templates/*.html"))
 
 	mux := http.NewServeMux()
@@ -66,29 +70,53 @@ func main() {
 	mux.HandleFunc("GET /{feed}", func(w http.ResponseWriter, r *http.Request) { list(w, tpl, r.PathValue("feed"), r) })
 	mux.HandleFunc("GET /item/{id}", itemHandler(tpl))
 	mux.HandleFunc("GET /user/{name}", userHandler(tpl))
-	mux.HandleFunc("GET /login", loginForm(tpl))
-	mux.HandleFunc("POST /login", loginPost)
-	mux.HandleFunc("POST /vote/{id}", votePost)
 
 	log.Printf("ynews listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux))
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           secureHeaders(mux),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	log.Fatal(srv.ListenAndServe())
+}
+
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func apiErr(w http.ResponseWriter, err error) {
+	log.Print(err)
+	http.Error(w, "HN API error, try again", http.StatusBadGateway)
 }
 
 func list(w http.ResponseWriter, tpl *template.Template, feed string, r *http.Request) {
+	api, ok := feedAPI[feed]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
 	page, err := strconv.Atoi(r.URL.Query().Get("p"))
 	if err != nil || page < 0 {
 		page = 0
 	}
-	rows, err := client.Stories(feed, page)
+	rows, err := client.Stories(api, page)
 	if err != nil {
-		http.Error(w, "HN API error: "+err.Error(), http.StatusBadGateway)
+		apiErr(w, err)
 		return
 	}
-	if feed == "" {
-		feed = "top"
+	active := feed
+	if r.URL.Path == "/" {
+		active = "top"
 	}
-	p := Page{Title: feed, Rows: rows, Next: page + 1}
-	p.setNav(feed)
+	p := Page{Title: active, Rows: rows, Next: page + 1}
+	p.setNav(active)
 	if err := tpl.ExecuteTemplate(w, "list.html", p); err != nil {
 		log.Print(err)
 	}
@@ -103,7 +131,7 @@ func itemHandler(tpl *template.Template) http.HandlerFunc {
 		}
 		story, comments, err := client.Thread(id)
 		if err != nil {
-			http.Error(w, "HN API error: "+err.Error(), http.StatusBadGateway)
+			apiErr(w, err)
 			return
 		}
 		p := Page{Title: story.Title, Story: story, Comments: comments}
@@ -119,7 +147,7 @@ func userHandler(tpl *template.Template) http.HandlerFunc {
 		name := r.PathValue("name")
 		u, err := client.User(name)
 		if err != nil {
-			http.Error(w, "HN API error: "+err.Error(), http.StatusBadGateway)
+			apiErr(w, err)
 			return
 		}
 		p := Page{Title: u.ID, User: u}
@@ -128,27 +156,6 @@ func userHandler(tpl *template.Template) http.HandlerFunc {
 			log.Print(err)
 		}
 	}
-}
-
-func loginForm(tpl *template.Template) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		p := Page{Title: "login"}
-		p.setNav("")
-		if err := tpl.ExecuteTemplate(w, "login.html", p); err != nil {
-			log.Print(err)
-		}
-	}
-}
-
-func loginPost(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	_, err := hn.Login(r.FormValue("username"), r.FormValue("password"))
-	http.Error(w, "login not implemented yet (M3): "+err.Error(), http.StatusNotImplemented)
-}
-
-func votePost(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, `<span class="voted" title="voting lands in M3">▲</span>`)
 }
 
 func age(t int64) string {

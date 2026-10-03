@@ -43,11 +43,28 @@ type Client struct {
 
 func NewClient() *Client {
 	return &Client{
-		http:  &http.Client{Timeout: 10 * time.Second},
+		http:  &http.Client{Timeout: 10 * time.Second, Transport: limitedTransport(50)},
 		items: newCache[int, Item](60 * time.Second),
 		users: newCache[string, User](5 * time.Minute),
 	}
 }
+
+// limitedTransport caps concurrent outbound requests globally, so many
+// simultaneous visitors can't multiply the per-thread fan-out into an
+// unbounded hammering of the HN API.
+func limitedTransport(max int) http.RoundTripper {
+	rt := http.DefaultTransport
+	sem := make(chan struct{}, max)
+	return roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		sem <- struct{}{}
+		defer func() { <-sem }()
+		return rt.RoundTrip(r)
+	})
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func (c *Client) Item(id int) (Item, error) {
 	if it, ok := c.items.get(id); ok {
