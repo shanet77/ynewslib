@@ -1,0 +1,7 @@
+{{template "head" .}}
+<article class="op">
+  <h1>{{.User.ID}}</h1>
+  <div class="meta">karma {{.User.Karma}} · created {{age .User.Created}}</div>
+  <div class="text">{{sanitize .User.About}}</div>
+</article>
+{{template "foot"}}

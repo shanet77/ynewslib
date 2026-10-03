@@ -1,0 +1,12 @@
+{{template "head" .}}
+<article class="op">
+  <h1>{{if .Story.URL}}<a href="{{.Story.URL}}">{{.Story.Title}}</a><a class="domain" href="{{.Story.URL}}">({{domain .Story.URL}})</a>{{else}}{{.Story.Title}}{{end}}</h1>
+  {{- if .Story.Text}}<div class="text">{{sanitize .Story.Text}}</div>{{end}}
+  <div class="meta">{{.Story.Score}} points by <a href="/user/{{.Story.By}}">{{.Story.By}}</a> · {{age .Story.Time}} · {{.Story.Desc}} comments</div>
+</article>
+{{if .Comments}}
+<section class="comments">
+  {{range .Comments}}{{template "comment" .}}{{end}}
+</section>
+{{end}}
+{{template "foot"}}

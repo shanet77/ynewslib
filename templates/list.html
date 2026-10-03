@@ -1,0 +1,19 @@
+{{template "head" .}}
+<ol class="stories">
+{{- range $i, $it := .Rows}}
+  {{- if not $it.Title}}{{continue}}{{end}}
+  <li>
+    <span class="rank">{{$i}},</span>
+    <div class="story">
+      <a class="title" href="{{if $it.URL}}{{$it.URL}}{{else}}/item/{{$it.ID}}{{end}}">{{$it.Title}}</a>
+      {{- if $it.URL}} <a class="domain" href="/item/{{$it.ID}}">({{domain $it.URL}})</a>{{end}}
+      <div class="meta">
+        <span class="score">{{$it.Score}} points</span> by <a href="/user/{{$it.By}}">{{$it.By}}</a> · {{age $it.Time}} · <a href="/item/{{$it.ID}}">{{$it.Desc}} comments</a>
+        <button class="vote" hx-post="/vote/{{$it.ID}}" hx-swap="outerHTML">▲</button>
+      </div>
+    </div>
+  </li>
+{{- end}}
+</ol>
+{{if .Next}}<a class="more" href="?p={{.Next}}">More</a>{{end}}
+{{template "foot"}}

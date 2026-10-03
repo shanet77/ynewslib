@@ -1,0 +1,24 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{if .Title}}{{.Title}} · {{end}}ynews</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<nav>
+  <a class="logo" href="/">y</a>
+  {{range .Nav}}<a href="/{{.Path}}" {{if eq .Label $.Active}}class="active"{{end}}>{{.Label}}</a>{{end}}
+  <span class="spacer"></span>
+  <a href="/login">login</a>
+</nav>
+<main>
+{{end}}
+
+{{define "foot"}}
+</main>
+</body>
+</html>
+{{end}}
