@@ -50,7 +50,11 @@ article.op { margin-bottom: 1rem; }
 article.op h1 { font-size: 1.25rem; margin: .2rem 0 .4rem; }
 article.op h1 .domain { font-weight: 400; }
 .text { overflow-wrap: anywhere; }
-details.comment { margin: .4rem 0 .4rem .9rem; padding-left: .75rem; border-left: 2px solid var(--line); }
+details.comment { position: relative; margin: .4rem 0 .4rem .9rem; padding-left: .75rem; border-left: 2px solid var(--line); }
+details.comment > summary::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: -5px; width: 10px;
+  cursor: pointer;
+}
 details.comment summary {
   color: var(--dim); font-size: .82rem; cursor: pointer; user-select: none;
   list-style: none; margin-left: -.75rem;
