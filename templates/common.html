@@ -5,12 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{if .Title}}{{.Title}} · {{end}}ynews</title>
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/theme.css">
 </head>
 <body>
 <nav>
   <a class="logo" href="/">y</a>
   {{range .Nav}}<a href="/{{.Path}}" {{if eq .Label $.Active}}class="active"{{end}}>{{.Label}}</a>{{end}}
   <span class="spacer"></span>
+  <details class="theme">
+    <summary>theme</summary>
+    <div class="menu">
+      <a href="/theme/auto?back={{.Path}}">auto</a>
+      <a href="/theme/dark?back={{.Path}}">dark</a>
+      <a href="/theme/light?back={{.Path}}">light</a>
+    </div>
+  </details>
 </nav>
 <main>
 {{end}}

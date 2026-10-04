@@ -32,6 +32,17 @@ nav .logo {
   width: 1.6rem; height: 1.6rem; display: grid; place-items: center; border-radius: 4px;
 }
 nav .spacer { flex: 1; }
+details.theme { position: relative; }
+details.theme summary {
+  color: #fff; opacity: .85; cursor: pointer; list-style: none; font-size: .9rem;
+}
+details.theme[open] summary, details.theme summary:hover { opacity: 1; }
+details.theme .menu {
+  position: absolute; right: 0; top: 100%; z-index: 10; min-width: 5rem;
+  display: grid; padding: .25rem; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px;
+}
+details.theme .menu a { color: var(--link); opacity: 1; padding: .2rem .5rem; }
 
 main { max-width: 52rem; margin: 0 auto; padding: 1rem; }
 

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +42,7 @@ type Page struct {
 	Title    string
 	Nav      []Feed
 	Active   string
+	Path     string
 	Rows     []hn.Item
 	Next     int
 	Story    hn.Item
@@ -66,6 +69,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.FileServerFS(files))
+	mux.HandleFunc("GET /theme.css", themeCSS)
+	mux.HandleFunc("GET /theme/{name}", setTheme)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { list(w, tpl, "top", r) })
 	mux.HandleFunc("GET /{feed}", func(w http.ResponseWriter, r *http.Request) { list(w, tpl, r.PathValue("feed"), r) })
 	mux.HandleFunc("GET /item/{id}", itemHandler(tpl))
@@ -89,6 +94,86 @@ func secureHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// theme support: everything in style.css derives from these six variables, so a
+// theme is just values for them. "auto" (empty cookie) lets style.css's
+// prefers-color-scheme media query decide.
+var themeVars = []string{"bg", "fg", "dim", "link", "line", "accent"}
+
+var palettes = map[string]map[string]string{
+	"dark":  {"bg": "#14171a", "fg": "#d6d3cd", "dim": "#8a8f98", "link": "#f0a35e", "line": "#2a2f36", "accent": "#ff6600"},
+	"light": {"bg": "#fafaf8", "fg": "#1a1c1e", "dim": "#6b7280", "link": "#b35c00", "line": "#e5e5e0", "accent": "#ff6600"},
+}
+
+var hexRe = regexp.MustCompile(`^#?(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
+
+func themeCSS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	c, err := r.Cookie("theme")
+	if err != nil {
+		return
+	}
+	pal, ok := palettes[c.Value]
+	if !ok && c.Value != "auto" {
+		pal = parseCustomTheme(c.Value)
+	}
+	if pal == nil {
+		return
+	}
+	var b []byte
+	b = append(b, ":root{"...)
+	for _, k := range themeVars {
+		if v, ok := pal[k]; ok {
+			b = append(b, ("--" + k + ":" + v + ";")...)
+		}
+	}
+	w.Write(append(b, '}'))
+}
+
+// cookie format: "bg=#14171a,fg=#d6d3cd,..." — nil if anything is invalid
+func parseCustomTheme(v string) map[string]string {
+	pal := map[string]string{}
+	for _, part := range strings.Split(v, ",") {
+		k, val, ok := strings.Cut(part, "=")
+		if !ok || !slices.Contains(themeVars, k) || !hexRe.MatchString(val) {
+			return nil
+		}
+		if !strings.HasPrefix(val, "#") {
+			val = "#" + val
+		}
+		pal[k] = val
+	}
+	return pal
+}
+
+func setTheme(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	back := r.URL.Query().Get("back")
+	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") {
+		back = "/"
+	}
+	var val string
+	if name == "custom" {
+		var b strings.Builder
+		for _, k := range themeVars {
+			if v := r.URL.Query().Get(k); hexRe.MatchString(v) {
+				fmt.Fprintf(&b, "%s=%s,", k, v)
+			}
+		}
+		val = strings.TrimSuffix(b.String(), ",")
+	} else if _, ok := palettes[name]; ok || name == "auto" {
+		val = name
+	} else {
+		http.NotFound(w, r)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: "theme", Value: val, Path: "/", MaxAge: 31536000,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, back, http.StatusFound)
 }
 
 func apiErr(w http.ResponseWriter, err error) {
@@ -115,7 +200,7 @@ func list(w http.ResponseWriter, tpl *template.Template, feed string, r *http.Re
 	if r.URL.Path == "/" {
 		active = "top"
 	}
-	p := Page{Title: active, Rows: rows, Next: page + 1}
+	p := Page{Title: active, Rows: rows, Next: page + 1, Path: r.URL.RequestURI()}
 	p.setNav(active)
 	if err := tpl.ExecuteTemplate(w, "list.html", p); err != nil {
 		log.Print(err)
@@ -134,7 +219,7 @@ func itemHandler(tpl *template.Template) http.HandlerFunc {
 			apiErr(w, err)
 			return
 		}
-		p := Page{Title: story.Title, Story: story, Comments: comments}
+		p := Page{Title: story.Title, Story: story, Comments: comments, Path: r.URL.RequestURI()}
 		p.setNav("")
 		if err := tpl.ExecuteTemplate(w, "thread.html", p); err != nil {
 			log.Print(err)
@@ -150,7 +235,7 @@ func userHandler(tpl *template.Template) http.HandlerFunc {
 			apiErr(w, err)
 			return
 		}
-		p := Page{Title: u.ID, User: u}
+		p := Page{Title: u.ID, User: u, Path: r.URL.RequestURI()}
 		p.setNav("")
 		if err := tpl.ExecuteTemplate(w, "user.html", p); err != nil {
 			log.Print(err)
